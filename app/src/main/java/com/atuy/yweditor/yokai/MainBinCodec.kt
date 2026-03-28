@@ -82,8 +82,7 @@ class MainBinCodec {
         writeIntLe(out, payloadStart + encrypted.size, crc)
         writeIntLe(out, payloadStart + encrypted.size + 4, section.seed)
 
-        val totalCrc = calcCrc32(out.copyOfRange(4, out.size))
-        writeIntLe(out, 0, totalCrc)
+        // 先頭4バイトは触らない（ゲーム側識別用ヘッダを保持）
         return out
     }
 
@@ -212,4 +211,3 @@ class MainBinCodec {
         data[offset + 3] = ((value ushr 24) and 0xFF).toByte()
     }
 }
-
