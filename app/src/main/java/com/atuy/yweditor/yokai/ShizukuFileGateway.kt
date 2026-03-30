@@ -74,6 +74,26 @@ class ShizukuFileGateway {
         }
     }
 
+    fun lastModifiedMillis(path: String): Long {
+        val process = startProcess(
+            arrayOf(
+                "sh",
+                "-c",
+                "stat -c %Y ${shellQuote(path)} 2>/dev/null || toybox stat -c %Y ${shellQuote(path)}",
+            ),
+        )
+        val output = inputStreamOf(process).use { it.readBytes().toString(Charsets.UTF_8).trim() }
+        val error = errorStreamOf(process).use { it.readBytes().toString(Charsets.UTF_8).trim() }
+        val code = waitFor(process)
+        if (code != 0) {
+            throw IOException("更新日時取得失敗(code=$code): ${if (error.isBlank()) "unknown" else error}")
+        }
+
+        val seconds = output.lineSequence().firstOrNull()?.toLongOrNull()
+            ?: throw IOException("更新日時の解析に失敗: $output")
+        return seconds * 1000L
+    }
+
     private fun exec(command: Array<String>) {
         val process = startProcess(command)
         val error = errorStreamOf(process).use { it.readBytes().toString(Charsets.UTF_8).trim() }

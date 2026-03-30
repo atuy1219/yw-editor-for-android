@@ -2,7 +2,9 @@ package com.atuy.yweditor.yokai
 
 import java.nio.charset.Charset
 
-class YokaiParser {
+class YokaiParser(
+    private val masterData: YokaiMasterData = YokaiMasterData.EMPTY,
+) {
 
     private val yokaiStart = 0x1D40
     private val yokaiSize = 0x7C
@@ -23,6 +25,10 @@ class YokaiParser {
             val name = rawName.copyOfRange(0, end).toString(Charset.forName("UTF-8"))
 
             val level = game0Data[base + 0x74].toInt() and 0xFF
+            val attackLevel = game0Data[base + 0x4E].toInt() and 0xFF
+            val techniqueLevel = game0Data[base + 0x52].toInt() and 0xFF
+            val soultimateLevel = game0Data[base + 0x56].toInt() and 0xFF
+            val attitudeId = game0Data[base + 0x75].toInt() and 0xFF
 
             val iva = Stat5(
                 hp = game0Data[base + 0x60].toInt() and 0xFF,
@@ -63,16 +69,30 @@ class YokaiParser {
                 speed = game0Data[base + 0x6E].toInt() and 0xFF,
             )
 
+            val masterName = masterData.nameById[yokaiId]
+            val detail = masterData.detailById[yokaiId]
+
             result.add(
                 YokaiEntry(
                     slot = i,
                     id = yokaiId,
-                    name = if (name.isBlank()) "(名前なし)" else name,
+                    name = when {
+                        !masterName.isNullOrBlank() -> masterName
+                        name.isBlank() -> "(名前なし)"
+                        else -> name
+                    },
                     level = level,
+                    attackLevel = attackLevel,
+                    techniqueLevel = techniqueLevel,
+                    soultimateLevel = soultimateLevel,
+                    attitudeId = attitudeId,
                     iva = iva,
                     ivb1 = ivb1,
                     ivb2 = ivb2,
                     cb = cb,
+                    baseStats = detail?.baseStats,
+                    growPattern = detail?.growPattern,
+                    yokaiClass = detail?.yokaiClass,
                 )
             )
         }
@@ -88,6 +108,10 @@ class YokaiParser {
             if (base + yokaiSize > out.size) continue
 
             out[base + 0x74] = clamp(entry.level, 0, 255).toByte()
+            out[base + 0x4E] = clamp(entry.attackLevel, 0, 99).toByte()
+            out[base + 0x52] = clamp(entry.techniqueLevel, 0, 99).toByte()
+            out[base + 0x56] = clamp(entry.soultimateLevel, 0, 99).toByte()
+            out[base + 0x75] = clamp(entry.attitudeId, 0, 255).toByte()
 
             writeStat5(out, base + 0x60, entry.iva, max = 255)
             writePackedNibbleStat5(out, base + 0x65, entry.ivb1, entry.ivb2)

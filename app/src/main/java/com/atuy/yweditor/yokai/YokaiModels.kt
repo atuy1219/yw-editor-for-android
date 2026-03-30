@@ -26,10 +26,17 @@ data class YokaiEntry(
     val id: Long,
     val name: String,
     val level: Int,
+    val attackLevel: Int,
+    val techniqueLevel: Int,
+    val soultimateLevel: Int,
+    val attitudeId: Int,
     val iva: Stat5,
     val ivb1: Stat5,
     val ivb2: Stat5,
     val cb: Stat5,
+    val baseStats: Stat5? = null,
+    val growPattern: Stat5? = null,
+    val yokaiClass: Int? = null,
 )
 
 data class MainSection(
@@ -51,5 +58,21 @@ enum class StatGroup {
     IVB1,
     IVB2,
     CB,
+}
+
+fun yokaiClassLabel(value: Int?): String {
+    return when (value) {
+        1 -> "イサマシ"
+        2 -> "フシギ"
+        3 -> "ゴーケツ"
+        4 -> "プリチー"
+        5 -> "ポカポカ"
+        6 -> "ウスラカゲ"
+        7 -> "ブキミー"
+        8 -> "ニョロロン"
+        0 -> "ボス"
+        null -> "-"
+        else -> "不明($value)"
+    }
 }
 
