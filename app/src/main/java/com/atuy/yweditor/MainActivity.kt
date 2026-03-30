@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +26,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,8 +45,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +63,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.atuy.yweditor.ui.theme.YwEditorTheme
+import com.atuy.yweditor.yokai.MainBinBackupInfo
 import com.atuy.yweditor.yokai.ShizukuFileGateway
 import com.atuy.yweditor.yokai.Stat5
 import com.atuy.yweditor.yokai.StatGroup
@@ -129,6 +136,16 @@ private fun AppScreen(
         mainViewModel.backToStartup()
     }
 
+    LaunchedEffect(state.currentScreen, shizukuGranted, state.startupSlotsLoaded) {
+        if (
+            state.currentScreen == AppScreen.Startup &&
+            shizukuGranted &&
+            !state.startupSlotsLoaded
+        ) {
+            mainViewModel.loadStartupSlots(mainBinPath)
+        }
+    }
+
     when (state.currentScreen) {
         AppScreen.Startup -> StartupScreen(
             slots = state.startupSaveSlots,
@@ -147,6 +164,13 @@ private fun AppScreen(
             shizukuGranted = shizukuGranted,
             onBack = mainViewModel::backToStartup,
             onSave = { mainViewModel.save(mainBinPath) },
+            onCreateBackup = { name, epochMillis ->
+                mainViewModel.createBackup(mainBinPath, name, epochMillis)
+            },
+            onRefreshBackups = { mainViewModel.refreshBackups(mainBinPath) },
+            onRestoreBackup = { backupFileName ->
+                mainViewModel.restoreBackup(mainBinPath, backupFileName)
+            },
             onTabSelect = mainViewModel::selectTopTab,
             onYokaiCardClick = { slot ->
                 mainViewModel.select(slot)
@@ -157,9 +181,14 @@ private fun AppScreen(
             onAttackLevelChange = { slot, value -> mainViewModel.updateAttackLevel(slot, value) },
             onTechniqueLevelChange = { slot, value -> mainViewModel.updateTechniqueLevel(slot, value) },
             onSoultimateLevelChange = { slot, value -> mainViewModel.updateSoultimateLevel(slot, value) },
+            onMajimeCorrectionChange = { slot, value -> mainViewModel.updateMajimeCorrection(slot, value) },
+            onStateFlagChange = { slot, mask, enabled -> mainViewModel.setStateFlag(slot, mask, enabled) },
             onStatChange = { slot, group, index, value ->
                 mainViewModel.updateStat(slot, group, index, value)
             },
+            onPlayHoursChange = mainViewModel::updatePlayHours,
+            onPlayMinutesChange = mainViewModel::updatePlayMinutes,
+            onPlayerNameChange = mainViewModel::updatePlayerName,
             modifier = modifier,
         )
     }
@@ -178,6 +207,7 @@ private fun StartupScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .statusBarsPadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -195,7 +225,7 @@ private fun StartupScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = shizukuGranted && !loading) {
+                    .clickable(enabled = shizukuGranted && !loading && slot.hasData) {
                         onSelectSlot(slot.sectionName)
                     },
             ) {
@@ -210,8 +240,12 @@ private fun StartupScreen(
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     )
                     Text(slot.subtitle)
-                    Text("名前(先頭妖怪): ${slot.displayName ?: "-"}")
-                    Text("プレイ時間: ${slot.playTimeText ?: "未解析"}")
+                    if (!slot.hasData) {
+                        Text("データがありません")
+                    } else {
+                        Text("プレイヤー名: ${slot.displayName ?: "-"}")
+                        Text("プレイ時間: ${slot.playTimeText ?: "未解析"}")
+                    }
                     Text("最終更新: ${formatDateTime(slot.lastUpdatedEpochMillis)}")
                     Text("妖怪数: ${slot.yokaiCount?.toString() ?: "-"}")
                     if (isSelected) {
@@ -221,16 +255,11 @@ private fun StartupScreen(
             }
         }
 
+
         if (loading) {
             Text("読み込み中...")
         }
     }
-}
-
-private fun formatDateTime(epochMillis: Long?): String {
-    if (epochMillis == null) return "未取得"
-    val formatter = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.JAPAN)
-    return formatter.format(Date(epochMillis))
 }
 
 @Composable
@@ -240,6 +269,9 @@ private fun EditorScreen(
     shizukuGranted: Boolean,
     onBack: () -> Unit,
     onSave: () -> Unit,
+    onCreateBackup: (String, Long) -> Unit,
+    onRefreshBackups: () -> Unit,
+    onRestoreBackup: (String) -> Unit,
     onTabSelect: (EditorTopTab) -> Unit,
     onYokaiCardClick: (Int) -> Unit,
     onLevelChange: (Int, Int) -> Unit,
@@ -247,9 +279,18 @@ private fun EditorScreen(
     onAttackLevelChange: (Int, Int) -> Unit,
     onTechniqueLevelChange: (Int, Int) -> Unit,
     onSoultimateLevelChange: (Int, Int) -> Unit,
+    onMajimeCorrectionChange: (Int, Int) -> Unit,
+    onStateFlagChange: (Int, Int, Boolean) -> Unit,
     onStatChange: (Int, StatGroup, Int, Int) -> Unit,
+    onPlayHoursChange: (Int) -> Unit,
+    onPlayMinutesChange: (Int) -> Unit,
+    onPlayerNameChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showCreateBackupDialog by remember { mutableStateOf(false) }
+    var showBackupListDialog by remember { mutableStateOf(false) }
+    var restoreTarget by remember { mutableStateOf<MainBinBackupInfo?>(null) }
+
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -261,6 +302,21 @@ private fun EditorScreen(
                     }
                 },
                 actions = {
+                    TextButton(
+                        onClick = { showCreateBackupDialog = true },
+                        enabled = shizukuGranted && state.loaded && !state.backupsCreating && !state.saving,
+                    ) {
+                        Text("バックアップ")
+                    }
+                    TextButton(
+                        onClick = {
+                            onRefreshBackups()
+                            showBackupListDialog = true
+                        },
+                        enabled = shizukuGranted && state.loaded && !state.backupsLoading && !state.backupsRestoring,
+                    ) {
+                        Text("リストア")
+                    }
                     IconButton(
                         onClick = onSave,
                         enabled = shizukuGranted && state.loaded && !state.saving,
@@ -304,8 +360,24 @@ private fun EditorScreen(
                     onAttackLevelChange = onAttackLevelChange,
                     onTechniqueLevelChange = onTechniqueLevelChange,
                     onSoultimateLevelChange = onSoultimateLevelChange,
+                    onMajimeCorrectionChange = onMajimeCorrectionChange,
+                    onStateFlagChange = onStateFlagChange,
                     onStatChange = onStatChange,
                     modifier = Modifier.fillMaxSize(),
+                )
+
+                EditorTopTab.Info -> SaveInfoEditorSection(
+                    title = "セーブ情報",
+                    playHours = state.playHours,
+                    playMinutes = state.playMinutes,
+                    playerName = state.playerName,
+                    playerNameError = state.playerNameError,
+                    onPlayHoursChange = onPlayHoursChange,
+                    onPlayMinutesChange = onPlayMinutesChange,
+                    onPlayerNameChange = onPlayerNameChange,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp),
                 )
 
                 else -> PlaceholderTabContent(
@@ -315,6 +387,251 @@ private fun EditorScreen(
             }
         }
     }
+
+    if (showCreateBackupDialog) {
+        CreateBackupDialog(
+            creating = state.backupsCreating,
+            onDismiss = { showCreateBackupDialog = false },
+            onConfirm = { name, epochMillis ->
+                onCreateBackup(name, epochMillis)
+                showCreateBackupDialog = false
+            },
+        )
+    }
+
+    if (showBackupListDialog) {
+        BackupListDialog(
+            backupItems = state.backupItems,
+            loading = state.backupsLoading,
+            restoring = state.backupsRestoring,
+            onDismiss = { showBackupListDialog = false },
+            onRefresh = onRefreshBackups,
+            onRequestRestore = { restoreTarget = it },
+        )
+    }
+
+    val target = restoreTarget
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { restoreTarget = null },
+            title = { Text("バックアップを復元") },
+            text = { Text("${target.displayName} (${formatDateTime(target.backupEpochMillis)}) を復元します。現在の main.bin は上書きされます。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRestoreBackup(target.fileName)
+                        restoreTarget = null
+                        showBackupListDialog = false
+                    },
+                    enabled = !state.backupsRestoring,
+                ) {
+                    Text("復元")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { restoreTarget = null }) {
+                    Text("キャンセル")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SaveInfoEditorSection(
+    title: String,
+    playHours: Int,
+    playMinutes: Int,
+    playerName: String,
+    playerNameError: String?,
+    onPlayHoursChange: (Int) -> Unit,
+    onPlayMinutesChange: (Int) -> Unit,
+    onPlayerNameChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val nameBytes = playerName.toByteArray(Charsets.UTF_8).size
+
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("プレイ時間")
+                CompactNumberField(
+                    value = playHours,
+                    max = 999_999,
+                    modifier = Modifier.width(100.dp),
+                    onValueChange = onPlayHoursChange,
+                )
+                Text("時間")
+                CompactNumberField(
+                    value = playMinutes,
+                    max = 59,
+                    modifier = Modifier.width(84.dp),
+                    onValueChange = onPlayMinutesChange,
+                )
+                Text("分")
+            }
+
+            OutlinedTextField(
+                value = playerName,
+                onValueChange = onPlayerNameChange,
+                singleLine = true,
+                label = { Text("プレイヤー名") },
+                isError = playerNameError != null,
+                supportingText = {
+                    Text(playerNameError ?: "UTF-8 ${nameBytes}/23 バイト")
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CreateBackupDialog(
+    creating: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Long) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var dateText by remember { mutableStateOf(formatDateForInput(System.currentTimeMillis())) }
+    var dateError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = {
+            if (!creating) onDismiss()
+        },
+        title = { Text("バックアップ作成") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = dateText,
+                    onValueChange = {
+                        dateText = it
+                        dateError = false
+                    },
+                    singleLine = true,
+                    label = { Text("日時(yyyyMMddHHmm)") },
+                    isError = dateError,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (dateError) {
+                    Text("日時は yyyyMMddHHmm 形式で入力してください")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val parsed = parseDateFromInput(dateText)
+                    if (parsed == null) {
+                        dateError = true
+                        return@TextButton
+                    }
+                    onConfirm(name, parsed)
+                },
+                enabled = !creating,
+            ) {
+                Text("作成")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !creating) {
+                Text("キャンセル")
+            }
+        },
+    )
+}
+
+@Composable
+private fun BackupListDialog(
+    backupItems: List<MainBinBackupInfo>,
+    loading: Boolean,
+    restoring: Boolean,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onRequestRestore: (MainBinBackupInfo) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("バックアップ一覧") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (backupItems.isEmpty()) {
+                    Text(if (loading) "読み込み中..." else "バックアップはありません")
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(backupItems, key = { it.fileName }) { backup ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !restoring) { onRequestRestore(backup) },
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                ) {
+                                    Text(backup.displayName, fontWeight = FontWeight.Medium)
+                                    Text(formatDateTime(backup.backupEpochMillis))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onRefresh, enabled = !loading && !restoring) {
+                Text("再読込")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("閉じる")
+            }
+        },
+    )
+}
+
+private fun formatDateTime(epochMillis: Long?): String {
+    if (epochMillis == null) return "未取得"
+    val formatter = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.JAPAN)
+    return formatter.format(Date(epochMillis))
+}
+
+private fun formatDateForInput(epochMillis: Long): String {
+    val formatter = SimpleDateFormat("yyyyMMddHHmm", Locale.JAPAN)
+    return formatter.format(Date(epochMillis))
+}
+
+private fun parseDateFromInput(value: String): Long? {
+    if (!Regex("^\\d{12}$").matches(value)) return null
+    val formatter = SimpleDateFormat("yyyyMMddHHmm", Locale.JAPAN)
+    formatter.isLenient = false
+    return runCatching { formatter.parse(value)?.time }.getOrNull()
 }
 
 @Composable
@@ -341,6 +658,8 @@ private fun YokaiTabContent(
     onAttackLevelChange: (Int, Int) -> Unit,
     onTechniqueLevelChange: (Int, Int) -> Unit,
     onSoultimateLevelChange: (Int, Int) -> Unit,
+    onMajimeCorrectionChange: (Int, Int) -> Unit,
+    onStateFlagChange: (Int, Int, Boolean) -> Unit,
     onStatChange: (Int, StatGroup, Int, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -409,6 +728,8 @@ private fun YokaiTabContent(
                                 onAttackLevelChange = { onAttackLevelChange(entry.slot, it) },
                                 onTechniqueLevelChange = { onTechniqueLevelChange(entry.slot, it) },
                                 onSoultimateLevelChange = { onSoultimateLevelChange(entry.slot, it) },
+                                onMajimeCorrectionChange = { onMajimeCorrectionChange(entry.slot, it) },
+                                onStateFlagChange = { mask, enabled -> onStateFlagChange(entry.slot, mask, enabled) },
                                 onStatChange = { group, index, value ->
                                     onStatChange(entry.slot, group, index, value)
                                 },
@@ -434,6 +755,8 @@ private fun YokaiStatusEditorPanel(
     onAttackLevelChange: (Int) -> Unit,
     onTechniqueLevelChange: (Int) -> Unit,
     onSoultimateLevelChange: (Int) -> Unit,
+    onMajimeCorrectionChange: (Int) -> Unit,
+    onStateFlagChange: (Int, Boolean) -> Unit,
     onStatChange: (StatGroup, Int, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -468,6 +791,14 @@ private fun YokaiStatusEditorPanel(
             onAttackLevelChange = onAttackLevelChange,
             onTechniqueLevelChange = onTechniqueLevelChange,
             onSoultimateLevelChange = onSoultimateLevelChange,
+        )
+        MajimeCorrectionRow(
+            correction = entry.majimeCorrection,
+            onCorrectionChange = onMajimeCorrectionChange,
+        )
+        StateFlagRow(
+            stateFlags = entry.stateFlags,
+            onFlagChange = onStateFlagChange,
         )
     }
 }
@@ -630,6 +961,66 @@ private fun TechniqueRow(
             modifier = Modifier.width(56.dp),
             onValueChange = onSoultimateLevelChange,
         )
+    }
+}
+
+@Composable
+private fun MajimeCorrectionRow(
+    correction: Int,
+    onCorrectionChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("まじめ度", modifier = Modifier.width(STATUS_LABEL_WIDTH), fontWeight = FontWeight.Medium)
+        CompactNumberField(
+            value = correction,
+            max = 255,
+            modifier = Modifier.width(72.dp),
+            onValueChange = onCorrectionChange,
+        )
+        Text("補正値(0x76)")
+    }
+}
+
+@Composable
+private fun StateFlagRow(
+    stateFlags: Int,
+    onFlagChange: (Int, Boolean) -> Unit,
+) {
+    val lockMask = 0x03
+    val bookMask = 0x04
+    val newMask = 0x08
+
+    val lockEnabled = stateFlags and lockMask == lockMask
+    val bookEnabled = stateFlags and bookMask != 0
+    val newEnabled = stateFlags and newMask != 0
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text("状態フラグ 0x77 = 0x${(stateFlags and 0xFF).toString(16).uppercase().padStart(2, '0')}")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = lockEnabled, onCheckedChange = { onFlagChange(lockMask, it) })
+                Text("おわかれ不可(0x03)")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = bookEnabled, onCheckedChange = { onFlagChange(bookMask, it) })
+                Text("本使用済み(0x04)")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = newEnabled, onCheckedChange = { onFlagChange(newMask, it) })
+                Text("NEW!(0x08)")
+            }
+        }
     }
 }
 

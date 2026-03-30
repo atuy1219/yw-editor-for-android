@@ -29,6 +29,8 @@ class YokaiParser(
             val techniqueLevel = game0Data[base + 0x52].toInt() and 0xFF
             val soultimateLevel = game0Data[base + 0x56].toInt() and 0xFF
             val attitudeId = game0Data[base + 0x75].toInt() and 0xFF
+            val majimeCorrection = game0Data[base + 0x76].toInt() and 0xFF
+            val stateFlags = game0Data[base + 0x77].toInt() and 0xFF
 
             val iva = Stat5(
                 hp = game0Data[base + 0x60].toInt() and 0xFF,
@@ -86,6 +88,8 @@ class YokaiParser(
                     techniqueLevel = techniqueLevel,
                     soultimateLevel = soultimateLevel,
                     attitudeId = attitudeId,
+                    majimeCorrection = majimeCorrection,
+                    stateFlags = stateFlags,
                     iva = iva,
                     ivb1 = ivb1,
                     ivb2 = ivb2,
@@ -112,6 +116,8 @@ class YokaiParser(
             out[base + 0x52] = clamp(entry.techniqueLevel, 0, 99).toByte()
             out[base + 0x56] = clamp(entry.soultimateLevel, 0, 99).toByte()
             out[base + 0x75] = clamp(entry.attitudeId, 0, 255).toByte()
+            out[base + 0x76] = clamp(entry.majimeCorrection, 0, 255).toByte()
+            out[base + 0x77] = clamp(entry.stateFlags, 0, 255).toByte()
 
             writeStat5(out, base + 0x60, entry.iva, max = 255)
             writePackedNibbleStat5(out, base + 0x65, entry.ivb1, entry.ivb2)

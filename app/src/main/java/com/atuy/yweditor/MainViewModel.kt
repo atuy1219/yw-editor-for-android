@@ -3,7 +3,10 @@ package com.atuy.yweditor
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.atuy.yweditor.yokai.MainBinCodec
+import com.atuy.yweditor.yokai.MainBinBackupInfo
 import com.atuy.yweditor.yokai.MainBinDecoded
+import com.atuy.yweditor.yokai.SaveInfo
+import com.atuy.yweditor.yokai.SaveInfoCodec
 import com.atuy.yweditor.yokai.YokaiAttitude
 import com.atuy.yweditor.yokai.StatGroup
 import com.atuy.yweditor.yokai.YokaiEntry
@@ -34,6 +37,7 @@ data class SaveSlotCard(
     val sectionName: String,
     val title: String,
     val subtitle: String,
+    val hasData: Boolean = true,
     val displayName: String? = null,
     val playTimeText: String? = null,
     val lastUpdatedEpochMillis: Long? = null,
@@ -44,6 +48,7 @@ private val DEFAULT_STARTUP_SLOTS = listOf(
     SaveSlotCard(sectionName = "game0.yw", title = "オートセーブ", subtitle = "game0.yw"),
     SaveSlotCard(sectionName = "game1.yw", title = "にっき1", subtitle = "game1.yw"),
     SaveSlotCard(sectionName = "game2.yw", title = "にっき2", subtitle = "game2.yw"),
+    SaveSlotCard(sectionName = "game3.yw", title = "にっき3", subtitle = "game3.yw"),
 )
 
 data class EditorUiState(
@@ -59,11 +64,20 @@ data class EditorUiState(
     val loaded: Boolean = false,
     val attitudes: List<YokaiAttitude> = emptyList(),
     val startupSaveSlots: List<SaveSlotCard> = DEFAULT_STARTUP_SLOTS,
+    val backupItems: List<MainBinBackupInfo> = emptyList(),
+    val backupsLoading: Boolean = false,
+    val backupsCreating: Boolean = false,
+    val backupsRestoring: Boolean = false,
+    val playHours: Int = 0,
+    val playMinutes: Int = 0,
+    val playerName: String = "",
+    val playerNameError: String? = null,
+    val startupSlotsLoaded: Boolean = false,
 )
 
 class MainViewModel : ViewModel() {
 
-    val editableSections = listOf("game0.yw", "game1.yw", "game2.yw")
+    val editableSections = listOf("game0.yw", "game1.yw", "game2.yw", "game3.yw")
 
     private val gateway = ShizukuFileGateway()
     private val codec = MainBinCodec()
@@ -106,7 +120,9 @@ class MainViewModel : ViewModel() {
                 val decoded = codec.decode(raw)
                 val section = decoded.sections[sectionName] ?: error("$sectionName が見つかりません")
                 val entries = parser.parse(section.decryptedData)
+                val saveInfo = SaveInfoCodec.parse(section.decryptedData)
                 val startupSlots = buildStartupSlots(decoded, path)
+                val backupItems = gateway.listManagedBackups(path)
 
                 decodedMainBin = decoded
 
@@ -119,6 +135,12 @@ class MainViewModel : ViewModel() {
                         expandedYokaiSlot = null,
                         selectedSlot = entries.firstOrNull()?.slot,
                         startupSaveSlots = startupSlots,
+                        backupItems = backupItems,
+                        playHours = saveInfo.playHours,
+                        playMinutes = saveInfo.playMinutes,
+                        playerName = saveInfo.playerName,
+                        playerNameError = null,
+                        startupSlotsLoaded = true,
                         message = "$sectionName を読み込みました",
                     )
                 }
@@ -131,7 +153,52 @@ class MainViewModel : ViewModel() {
                         expandedYokaiSlot = null,
                         selectedSlot = null,
                         startupSaveSlots = DEFAULT_STARTUP_SLOTS,
+                        backupItems = emptyList(),
+                        playHours = 0,
+                        playMinutes = 0,
+                        playerName = "",
+                        playerNameError = null,
+                        startupSlotsLoaded = false,
                         message = "読み込み失敗: ${e.message}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadStartupSlots(path: String) {
+        if (_uiState.value.loading) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(loading = true, message = "セーブ情報を読み込み中...") }
+            runCatching {
+                val raw = gateway.readBytes(path)
+                val decoded = codec.decode(raw)
+                val startupSlots = buildStartupSlots(decoded, path)
+                val selectedSection = _uiState.value.selectedSection
+                val selectedInfo = decoded.sections[selectedSection]?.let { section ->
+                    SaveInfoCodec.parse(section.decryptedData)
+                }
+                Triple(decoded, startupSlots, selectedInfo)
+            }.onSuccess { (decoded, startupSlots, selectedInfo) ->
+                decodedMainBin = decoded
+                _uiState.update {
+                    it.copy(
+                        loading = false,
+                        startupSaveSlots = startupSlots,
+                        playHours = selectedInfo?.playHours ?: it.playHours,
+                        playMinutes = selectedInfo?.playMinutes ?: it.playMinutes,
+                        playerName = selectedInfo?.playerName ?: it.playerName,
+                        startupSlotsLoaded = true,
+                        message = "セーブ情報を更新しました",
+                    )
+                }
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        loading = false,
+                        startupSlotsLoaded = false,
+                        message = "セーブ情報の読み込み失敗: ${e.message}",
                     )
                 }
             }
@@ -146,7 +213,13 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(saving = true, message = "保存中...") }
             runCatching {
-                val patchedSection = parser.applyEntries(section.decryptedData, _uiState.value.entries)
+                val saveInfo = SaveInfo(
+                    playHours = _uiState.value.playHours,
+                    playMinutes = _uiState.value.playMinutes,
+                    playerName = _uiState.value.playerName,
+                )
+                val withYokai = parser.applyEntries(section.decryptedData, _uiState.value.entries)
+                val patchedSection = SaveInfoCodec.apply(withYokai, saveInfo)
                 val updatedMainBin = codec.replaceSection(decoded, sectionName, patchedSection)
                 gateway.backup(path)
                 gateway.writeBytes(path, updatedMainBin)
@@ -155,7 +228,9 @@ class MainViewModel : ViewModel() {
                 val refreshedSection = decodedMainBin?.sections?.get(sectionName)
                     ?: error("保存後に $sectionName を再読み込みできません")
                 val refreshedEntries = parser.parse(refreshedSection.decryptedData)
+                val refreshedSaveInfo = SaveInfoCodec.parse(refreshedSection.decryptedData)
                 val startupSlots = decodedMainBin?.let { buildStartupSlots(it, path) } ?: DEFAULT_STARTUP_SLOTS
+                val backupItems = gateway.listManagedBackups(path)
 
                 _uiState.update {
                     it.copy(
@@ -164,6 +239,11 @@ class MainViewModel : ViewModel() {
                         expandedYokaiSlot = null,
                         selectedSlot = refreshedEntries.firstOrNull()?.slot,
                         startupSaveSlots = startupSlots,
+                        backupItems = backupItems,
+                        playHours = refreshedSaveInfo.playHours,
+                        playMinutes = refreshedSaveInfo.playMinutes,
+                        playerName = refreshedSaveInfo.playerName,
+                        playerNameError = null,
                         message = "$sectionName を保存しました（バックアップ作成済み）",
                     )
                 }
@@ -198,6 +278,7 @@ class MainViewModel : ViewModel() {
         }
 
         val entries = parser.parse(target.decryptedData)
+        val saveInfo = SaveInfoCodec.parse(target.decryptedData)
         _uiState.update {
             it.copy(
                 selectedSection = sectionName,
@@ -206,6 +287,10 @@ class MainViewModel : ViewModel() {
                 attitudes = masterData.attitudes,
                 expandedYokaiSlot = null,
                 selectedSlot = entries.firstOrNull()?.slot,
+                playHours = saveInfo.playHours,
+                playMinutes = saveInfo.playMinutes,
+                playerName = saveInfo.playerName,
+                playerNameError = null,
                 message = "$sectionName に切り替えました",
             )
         }
@@ -225,7 +310,111 @@ class MainViewModel : ViewModel() {
     }
 
     fun backToStartup() {
-        _uiState.update { it.copy(currentScreen = AppScreen.Startup) }
+        _uiState.update {
+            it.copy(
+                currentScreen = AppScreen.Startup,
+                startupSlotsLoaded = false,
+            )
+        }
+    }
+
+    fun refreshBackups(path: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(backupsLoading = true, message = "バックアップ一覧を取得中...") }
+            runCatching {
+                gateway.listManagedBackups(path)
+            }.onSuccess { items ->
+                _uiState.update {
+                    it.copy(
+                        backupsLoading = false,
+                        backupItems = items,
+                        message = "バックアップ一覧を更新しました",
+                    )
+                }
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        backupsLoading = false,
+                        message = "バックアップ一覧取得失敗: ${e.message}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun createBackup(path: String, backupName: String, backupEpochMillis: Long) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(backupsCreating = true, message = "バックアップ作成中...") }
+            runCatching {
+                gateway.createManagedBackup(path, backupEpochMillis, backupName)
+                gateway.listManagedBackups(path)
+            }.onSuccess { items ->
+                _uiState.update {
+                    it.copy(
+                        backupsCreating = false,
+                        backupItems = items,
+                        message = "バックアップを作成しました",
+                    )
+                }
+            }.onFailure { e ->
+                _uiState.update {
+                    it.copy(
+                        backupsCreating = false,
+                        message = "バックアップ作成失敗: ${e.message}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun restoreBackup(path: String, backupFileName: String) {
+        val sectionName = _uiState.value.selectedSection
+        val currentDecoded = decodedMainBin ?: run {
+            _uiState.update { it.copy(message = "先に main.bin を読み込んでください") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(backupsRestoring = true, message = "バックアップを復元中...") }
+            runCatching {
+                gateway.restoreManagedBackup(path, backupFileName)
+                val raw = gateway.readBytes(path)
+                val decoded = codec.decode(raw)
+                val section = decoded.sections[sectionName] ?: error("$sectionName が見つかりません")
+                val entries = parser.parse(section.decryptedData)
+                val saveInfo = SaveInfoCodec.parse(section.decryptedData)
+                val startupSlots = buildStartupSlots(decoded, path)
+                val backups = gateway.listManagedBackups(path)
+                decoded to Quadruple(entries, saveInfo, startupSlots, backups)
+            }.onSuccess { (decoded, payload) ->
+                decodedMainBin = decoded
+                val (entries, saveInfo, startupSlots, backups) = payload
+                _uiState.update {
+                    it.copy(
+                        backupsRestoring = false,
+                        loaded = true,
+                        entries = entries,
+                        expandedYokaiSlot = null,
+                        selectedSlot = entries.firstOrNull()?.slot,
+                        startupSaveSlots = startupSlots,
+                        backupItems = backups,
+                        playHours = saveInfo.playHours,
+                        playMinutes = saveInfo.playMinutes,
+                        playerName = saveInfo.playerName,
+                        playerNameError = null,
+                        message = "バックアップを復元しました",
+                    )
+                }
+            }.onFailure { e ->
+                decodedMainBin = currentDecoded
+                _uiState.update {
+                    it.copy(
+                        backupsRestoring = false,
+                        message = "バックアップ復元失敗: ${e.message}",
+                    )
+                }
+            }
+        }
     }
 
     fun selectTopTab(tab: EditorTopTab) {
@@ -269,6 +458,25 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun updateMajimeCorrection(slot: Int, correction: Int) {
+        updateEntry(slot) { entry ->
+            entry.copy(majimeCorrection = clampToRange(correction, 255))
+        }
+    }
+
+    fun setStateFlag(slot: Int, mask: Int, enabled: Boolean) {
+        updateEntry(slot) { entry ->
+            val current = entry.stateFlags and 0xFF
+            val normalizedMask = mask and 0xFF
+            val updated = if (enabled) {
+                current or normalizedMask
+            } else {
+                current and normalizedMask.inv()
+            }
+            entry.copy(stateFlags = updated and 0xFF)
+        }
+    }
+
     fun updateStat(slot: Int, group: StatGroup, index: Int, value: Int) {
         updateEntry(slot) { entry ->
             when (group) {
@@ -277,6 +485,29 @@ class MainViewModel : ViewModel() {
                 StatGroup.IVB2 -> entry.copy(ivb2 = entry.ivb2.update(index, clampToRange(value, 15)))
                 StatGroup.CB -> entry.copy(cb = entry.cb.update(index, clampToRange(value, 255)))
             }
+        }
+    }
+
+    fun updatePlayHours(value: Int) {
+        _uiState.update { state ->
+            state.copy(playHours = value.coerceAtLeast(0))
+        }
+    }
+
+    fun updatePlayMinutes(value: Int) {
+        _uiState.update { state ->
+            state.copy(playMinutes = value.coerceIn(0, 59))
+        }
+    }
+
+    fun updatePlayerName(value: String) {
+        val truncated = SaveInfoCodec.truncatePlayerName(value)
+        val limited = truncated == value
+        _uiState.update { state ->
+            state.copy(
+                playerName = truncated,
+                playerNameError = if (limited) null else "プレイヤー名はUTF-8で最大23バイトです",
+            )
         }
     }
 
@@ -300,13 +531,21 @@ class MainViewModel : ViewModel() {
         return DEFAULT_STARTUP_SLOTS.map { base ->
             val section = decoded.sections[base.sectionName]
             if (section == null) {
-                base.copy(lastUpdatedEpochMillis = lastUpdated)
+                base.copy(
+                    hasData = false,
+                    displayName = "データがありません",
+                    playTimeText = "データがありません",
+                    lastUpdatedEpochMillis = lastUpdated,
+                    yokaiCount = null,
+                )
             } else {
                 val entries = parser.parse(section.decryptedData)
-                val firstName = entries.firstOrNull()?.name?.takeIf { it.isNotBlank() }
+                val saveInfo = SaveInfoCodec.parse(section.decryptedData)
+                val playTimeText = "%d時間%02d分".format(saveInfo.playHours, saveInfo.playMinutes)
                 base.copy(
-                    displayName = firstName,
-                    playTimeText = null,
+                    hasData = true,
+                    displayName = saveInfo.playerName.ifBlank { null },
+                    playTimeText = playTimeText,
                     lastUpdatedEpochMillis = lastUpdated,
                     yokaiCount = entries.size,
                 )
@@ -314,4 +553,11 @@ class MainViewModel : ViewModel() {
         }
     }
 }
+
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D,
+)
 

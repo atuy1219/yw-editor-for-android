@@ -30,6 +30,8 @@ data class YokaiEntry(
     val techniqueLevel: Int,
     val soultimateLevel: Int,
     val attitudeId: Int,
+    val majimeCorrection: Int,
+    val stateFlags: Int,
     val iva: Stat5,
     val ivb1: Stat5,
     val ivb2: Stat5,
