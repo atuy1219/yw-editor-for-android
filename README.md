@@ -1,6 +1,6 @@
 # YW Editor (Shizuku)
 
-`main.bin` を Shizuku 経由で読み込み、`game0.yw`〜`game3.yw` の妖怪データ(レベル / IVA / IVB1 / IVB2 / CB)を編集して保存する Android アプリです。
+`main.bin` を Shizuku 経由で読み込み、`game0.yw`〜`game3.yw` のデータを編集して保存する Android アプリです。
 
 ## 実装内容
 
@@ -27,3 +27,7 @@
 - Shizuku が shell 権限で動作している場合、端末設定によっては `/data/user/0/...` へアクセスできないことがあります。
 - 書き込み前に自動バックアップ(`.bak`)を作成しますが、自己責任で利用してください。
 
+## ライセンス
+
+- このプロジェクトのコードは MIT License で公開しています。詳細は `LICENSE` を参照してください。
+- 同梱している第三者著作物のライセンス情報は `THIRD_PARTY_NOTICES.md` を参照してください。
