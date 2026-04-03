@@ -111,6 +111,7 @@ class YokaiParser(
             val base = yokaiStart + entry.slot * yokaiSize
             if (base + yokaiSize > out.size) continue
 
+            writeIntLe(out, base + 0x04, entry.id.toInt())
             out[base + 0x74] = clamp(entry.level, 0, 255).toByte()
             out[base + 0x4E] = clamp(entry.attackLevel, 0, 99).toByte()
             out[base + 0x52] = clamp(entry.techniqueLevel, 0, 99).toByte()
@@ -149,6 +150,13 @@ class YokaiParser(
             ((data[offset + 1].toInt() and 0xFF) shl 8) or
             ((data[offset + 2].toInt() and 0xFF) shl 16) or
             ((data[offset + 3].toInt() and 0xFF) shl 24)
+    }
+
+    private fun writeIntLe(data: ByteArray, offset: Int, value: Int) {
+        data[offset] = (value and 0xFF).toByte()
+        data[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        data[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+        data[offset + 3] = ((value ushr 24) and 0xFF).toByte()
     }
 
     private fun clamp(value: Int, min: Int, max: Int): Int {

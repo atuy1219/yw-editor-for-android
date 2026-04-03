@@ -52,10 +52,10 @@ object YokaiMasterLoader {
 
     fun load(context: Context): YokaiMasterData {
         return runCatching {
-            val xmlText = context.resources.openRawResource(R.raw.yo_kai_ja)
+            val xmlText = context.resources.openRawResource(R.raw.youkai_ja)
                 .bufferedReader(Charsets.UTF_8)
                 .use { it.readText() }
-            val jsText = context.resources.openRawResource(R.raw.yo_kai)
+            val jsText = context.resources.openRawResource(R.raw.calc)
                 .bufferedReader(Charsets.UTF_8)
                 .use { it.readText() }
 

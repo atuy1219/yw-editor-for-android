@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.atuy.yweditor.ui.theme.YwEditorTheme
 import com.atuy.yweditor.yokai.MainBinBackupInfo
+import com.atuy.yweditor.yokai.SaveInfoCodec
 import com.atuy.yweditor.yokai.ShizukuFileGateway
 import com.atuy.yweditor.yokai.Stat5
 import com.atuy.yweditor.yokai.StatGroup
@@ -162,6 +163,8 @@ private fun AppScreen(
         AppScreen.Editor -> EditorScreen(
             state = state,
             shizukuGranted = shizukuGranted,
+            isCheatMode = state.isCheatMode,
+            onCheatModeChange = mainViewModel::setCheatMode,
             onBack = mainViewModel::backToStartup,
             onSave = { mainViewModel.save(mainBinPath) },
             onCreateBackup = { name, epochMillis ->
@@ -176,6 +179,7 @@ private fun AppScreen(
                 mainViewModel.select(slot)
                 mainViewModel.toggleYokaiExpanded(slot)
             },
+            onYokaiChange = { slot, value -> mainViewModel.updateYokai(slot, value) },
             onLevelChange = { slot, value -> mainViewModel.updateLevel(slot, value) },
             onAttitudeChange = { slot, value -> mainViewModel.updateAttitude(slot, value) },
             onAttackLevelChange = { slot, value -> mainViewModel.updateAttackLevel(slot, value) },
@@ -188,7 +192,14 @@ private fun AppScreen(
             },
             onPlayHoursChange = mainViewModel::updatePlayHours,
             onPlayMinutesChange = mainViewModel::updatePlayMinutes,
+            onMoneyChange = mainViewModel::updateMoney,
             onPlayerNameChange = mainViewModel::updatePlayerName,
+            onSaveYearChange = mainViewModel::updateSaveYear,
+            onSaveMonthChange = mainViewModel::updateSaveMonth,
+            onSaveDayChange = mainViewModel::updateSaveDay,
+            onSaveHourChange = mainViewModel::updateSaveHour,
+            onSaveMinuteChange = mainViewModel::updateSaveMinute,
+            yokaiOptions = state.yokaiOptions,
             modifier = modifier,
         )
     }
@@ -245,8 +256,8 @@ private fun StartupScreen(
                     } else {
                         Text("プレイヤー名: ${slot.displayName ?: "-"}")
                         Text("プレイ時間: ${slot.playTimeText ?: "未解析"}")
+                        Text("セーブ日時: ${slot.saveDateText ?: "未解析"}")
                     }
-                    Text("最終更新: ${formatDateTime(slot.lastUpdatedEpochMillis)}")
                     Text("妖怪数: ${slot.yokaiCount?.toString() ?: "-"}")
                     if (isSelected) {
                         Text("現在の選択")
@@ -267,6 +278,9 @@ private fun StartupScreen(
 private fun EditorScreen(
     state: EditorUiState,
     shizukuGranted: Boolean,
+    isCheatMode: Boolean,
+    yokaiOptions: List<YokaiOption>,
+    onCheatModeChange: (Boolean) -> Unit,
     onBack: () -> Unit,
     onSave: () -> Unit,
     onCreateBackup: (String, Long) -> Unit,
@@ -274,6 +288,7 @@ private fun EditorScreen(
     onRestoreBackup: (String) -> Unit,
     onTabSelect: (EditorTopTab) -> Unit,
     onYokaiCardClick: (Int) -> Unit,
+    onYokaiChange: (Int, Long) -> Unit,
     onLevelChange: (Int, Int) -> Unit,
     onAttitudeChange: (Int, Int) -> Unit,
     onAttackLevelChange: (Int, Int) -> Unit,
@@ -284,7 +299,13 @@ private fun EditorScreen(
     onStatChange: (Int, StatGroup, Int, Int) -> Unit,
     onPlayHoursChange: (Int) -> Unit,
     onPlayMinutesChange: (Int) -> Unit,
+    onMoneyChange: (Int) -> Unit,
     onPlayerNameChange: (String) -> Unit,
+    onSaveYearChange: (Int) -> Unit,
+    onSaveMonthChange: (Int) -> Unit,
+    onSaveDayChange: (Int) -> Unit,
+    onSaveHourChange: (Int) -> Unit,
+    onSaveMinuteChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showCreateBackupDialog by remember { mutableStateOf(false) }
@@ -353,8 +374,17 @@ private fun EditorScreen(
                 EditorTopTab.Yokai -> YokaiTabContent(
                     entries = state.entries,
                     expandedSlot = state.expandedYokaiSlot,
+                    yokaiOptions = yokaiOptions,
                     attitudes = state.attitudes,
+                    isCheatMode = isCheatMode,
+                    onCheatModeChange = onCheatModeChange,
+                    levelInputMax = if (isCheatMode) 255 else 99,
+                    ivaInputMax = if (isCheatMode) 255 else 8,
+                    ivb1InputMax = 15,
+                    ivb2InputMax = 15,
+                    cbInputMax = if (isCheatMode) 255 else 20,
                     onCardClick = onYokaiCardClick,
+                    onYokaiChange = onYokaiChange,
                     onLevelChange = onLevelChange,
                     onAttitudeChange = onAttitudeChange,
                     onAttackLevelChange = onAttackLevelChange,
@@ -370,11 +400,23 @@ private fun EditorScreen(
                     title = "セーブ情報",
                     playHours = state.playHours,
                     playMinutes = state.playMinutes,
+                    money = state.money,
                     playerName = state.playerName,
                     playerNameError = state.playerNameError,
+                    saveYear = state.saveYear,
+                    saveMonth = state.saveMonth,
+                    saveDay = state.saveDay,
+                    saveHour = state.saveHour,
+                    saveMinute = state.saveMinute,
                     onPlayHoursChange = onPlayHoursChange,
                     onPlayMinutesChange = onPlayMinutesChange,
+                    onMoneyChange = onMoneyChange,
                     onPlayerNameChange = onPlayerNameChange,
+                    onSaveYearChange = onSaveYearChange,
+                    onSaveMonthChange = onSaveMonthChange,
+                    onSaveDayChange = onSaveDayChange,
+                    onSaveHourChange = onSaveHourChange,
+                    onSaveMinuteChange = onSaveMinuteChange,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(12.dp),
@@ -442,15 +484,25 @@ private fun SaveInfoEditorSection(
     title: String,
     playHours: Int,
     playMinutes: Int,
+    money: Int,
     playerName: String,
     playerNameError: String?,
+    saveYear: Int,
+    saveMonth: Int,
+    saveDay: Int,
+    saveHour: Int,
+    saveMinute: Int,
     onPlayHoursChange: (Int) -> Unit,
     onPlayMinutesChange: (Int) -> Unit,
+    onMoneyChange: (Int) -> Unit,
     onPlayerNameChange: (String) -> Unit,
+    onSaveYearChange: (Int) -> Unit,
+    onSaveMonthChange: (Int) -> Unit,
+    onSaveDayChange: (Int) -> Unit,
+    onSaveHourChange: (Int) -> Unit,
+    onSaveMinuteChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val nameBytes = playerName.toByteArray(Charsets.UTF_8).size
-
     Card(modifier = modifier) {
         Column(
             modifier = Modifier
@@ -481,6 +533,22 @@ private fun SaveInfoEditorSection(
                 Text("分")
             }
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("所持金")
+                CompactNumberField(
+                    value = money,
+                    max = SaveInfoCodec.MONEY_MAX,
+                    modifier = Modifier.width(140.dp),
+                    onValueChange = onMoneyChange,
+                )
+                Text("円")
+            }
+
+            val nameBytes = playerName.toByteArray(Charsets.UTF_8).size
             OutlinedTextField(
                 value = playerName,
                 onValueChange = onPlayerNameChange,
@@ -492,6 +560,55 @@ private fun SaveInfoEditorSection(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Text("セーブ日時")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CompactNumberField(
+                    value = saveYear,
+                    max = 9999,
+                    modifier = Modifier.width(100.dp),
+                    onValueChange = onSaveYearChange,
+                )
+                Text("年")
+                CompactNumberField(
+                    value = saveMonth,
+                    max = 12,
+                    modifier = Modifier.width(72.dp),
+                    onValueChange = onSaveMonthChange,
+                )
+                Text("月")
+                CompactNumberField(
+                    value = saveDay,
+                    max = 31,
+                    modifier = Modifier.width(72.dp),
+                    onValueChange = onSaveDayChange,
+                )
+                Text("日")
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CompactNumberField(
+                    value = saveHour,
+                    max = 23,
+                    modifier = Modifier.width(84.dp),
+                    onValueChange = onSaveHourChange,
+                )
+                Text("時")
+                CompactNumberField(
+                    value = saveMinute,
+                    max = 59,
+                    modifier = Modifier.width(84.dp),
+                    onValueChange = onSaveMinuteChange,
+                )
+                Text("分")
+            }
         }
     }
 }
@@ -651,8 +768,17 @@ private fun PlaceholderTabContent(
 private fun YokaiTabContent(
     entries: List<YokaiEntry>,
     expandedSlot: Int?,
+    yokaiOptions: List<YokaiOption>,
     attitudes: List<YokaiAttitude>,
+    isCheatMode: Boolean,
+    onCheatModeChange: (Boolean) -> Unit,
+    levelInputMax: Int,
+    ivaInputMax: Int,
+    ivb1InputMax: Int,
+    ivb2InputMax: Int,
+    cbInputMax: Int,
     onCardClick: (Int) -> Unit,
+    onYokaiChange: (Int, Long) -> Unit,
     onLevelChange: (Int, Int) -> Unit,
     onAttitudeChange: (Int, Int) -> Unit,
     onAttackLevelChange: (Int, Int) -> Unit,
@@ -676,6 +802,18 @@ private fun YokaiTabContent(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Checkbox(
+                checked = isCheatMode,
+                onCheckedChange = onCheatModeChange,
+            )
+            Text("チートモード (LV/IVA/CBは最大255、IVB1/IVB2は15固定)")
+        }
+
         OutlinedTextField(
             value = searchText,
             onValueChange = { searchText = it },
@@ -722,7 +860,15 @@ private fun YokaiTabContent(
                             HorizontalDivider()
                             YokaiStatusEditorPanel(
                                 entry = entry,
+                                yokaiOptions = yokaiOptions,
                                 attitudes = attitudes,
+                                isCheatMode = isCheatMode,
+                                levelInputMax = levelInputMax,
+                                ivaInputMax = ivaInputMax,
+                                ivb1InputMax = ivb1InputMax,
+                                ivb2InputMax = ivb2InputMax,
+                                cbInputMax = cbInputMax,
+                                onYokaiChange = { onYokaiChange(entry.slot, it) },
                                 onLevelChange = { onLevelChange(entry.slot, it) },
                                 onAttitudeChange = { onAttitudeChange(entry.slot, it) },
                                 onAttackLevelChange = { onAttackLevelChange(entry.slot, it) },
@@ -744,12 +890,31 @@ private fun YokaiTabContent(
 
 private val ZERO_STAT = listOf(0, 0, 0, 0, 0)
 private val STATUS_LABEL_WIDTH = 44.dp
-private val STATUS_CELL_WIDTH = 52.dp
+private val STATUS_CELL_WIDTH = 64.dp
+private val IVA_EDITABLE_BY_CLASS: Map<Int, List<Boolean>> = mapOf(
+    0 to listOf(false, false, false, false, false),
+    1 to listOf(false, true, false, false, false),
+    2 to listOf(false, false, true, false, false),
+    3 to listOf(false, false, false, true, false),
+    4 to listOf(false, false, false, false, true),
+    5 to listOf(false, false, true, true, false),
+    6 to listOf(true, false, false, false, true),
+    7 to listOf(false, true, true, false, false),
+    8 to listOf(true, false, false, false, false),
+)
 
 @Composable
 private fun YokaiStatusEditorPanel(
     entry: YokaiEntry,
+    yokaiOptions: List<YokaiOption>,
     attitudes: List<YokaiAttitude>,
+    isCheatMode: Boolean,
+    levelInputMax: Int,
+    ivaInputMax: Int,
+    ivb1InputMax: Int,
+    ivb2InputMax: Int,
+    cbInputMax: Int,
+    onYokaiChange: (Long) -> Unit,
     onLevelChange: (Int) -> Unit,
     onAttitudeChange: (Int) -> Unit,
     onAttackLevelChange: (Int) -> Unit,
@@ -761,6 +926,11 @@ private fun YokaiStatusEditorPanel(
     modifier: Modifier = Modifier,
 ) {
     val finalStatus = YokaiStatusCalculator.calculate(entry)
+    val ivaEditableMask = if (isCheatMode) {
+        null
+    } else {
+        IVA_EDITABLE_BY_CLASS[entry.yokaiClass] ?: listOf(true, true, true, true, true)
+    }
 
     Column(
         modifier = modifier
@@ -770,19 +940,33 @@ private fun YokaiStatusEditorPanel(
     ) {
         StatusHeadRow(
             name = entry.name,
+            yokaiId = entry.id,
+            yokaiOptions = yokaiOptions,
             classLabel = yokaiClassLabel(entry.yokaiClass),
             level = entry.level,
+            levelInputMax = levelInputMax,
+            onYokaiChange = onYokaiChange,
+            onLevelChange = onLevelChange,
+        )
+        AttitudeMajimeRow(
             attitudes = attitudes,
             selectedAttitude = entry.attitudeId,
-            onLevelChange = onLevelChange,
+            correction = entry.majimeCorrection,
             onAttitudeChange = onAttitudeChange,
+            onCorrectionChange = onMajimeCorrectionChange,
         )
         StatusHeaderRow()
         StatusReadOnlyRow(label = "BS", values = entry.baseStats?.values() ?: ZERO_STAT)
-        StatusEditableRow(label = "IVA", stat = entry.iva, max = 255, onValueChange = { i, v -> onStatChange(StatGroup.IVA, i, v) })
-        StatusEditableRow(label = "IVB1", stat = entry.ivb1, max = 15, onValueChange = { i, v -> onStatChange(StatGroup.IVB1, i, v) })
-        StatusEditableRow(label = "IVB2", stat = entry.ivb2, max = 15, onValueChange = { i, v -> onStatChange(StatGroup.IVB2, i, v) })
-        StatusEditableRow(label = "CB", stat = entry.cb, max = 255, onValueChange = { i, v -> onStatChange(StatGroup.CB, i, v) })
+        StatusEditableRow(
+            label = "IVA",
+            stat = entry.iva,
+            max = ivaInputMax,
+            editableMask = ivaEditableMask,
+            onValueChange = { i, v -> onStatChange(StatGroup.IVA, i, v) },
+        )
+        StatusEditableRow(label = "IVB1", stat = entry.ivb1, max = ivb1InputMax, onValueChange = { i, v -> onStatChange(StatGroup.IVB1, i, v) })
+        StatusEditableRow(label = "IVB2", stat = entry.ivb2, max = ivb2InputMax, onValueChange = { i, v -> onStatChange(StatGroup.IVB2, i, v) })
+        StatusEditableRow(label = "CB", stat = entry.cb, max = cbInputMax, onValueChange = { i, v -> onStatChange(StatGroup.CB, i, v) })
         StatusReadOnlyRow(label = "最終", values = finalStatus?.values() ?: ZERO_STAT)
         TechniqueRow(
             attackLevel = entry.attackLevel,
@@ -791,10 +975,6 @@ private fun YokaiStatusEditorPanel(
             onAttackLevelChange = onAttackLevelChange,
             onTechniqueLevelChange = onTechniqueLevelChange,
             onSoultimateLevelChange = onSoultimateLevelChange,
-        )
-        MajimeCorrectionRow(
-            correction = entry.majimeCorrection,
-            onCorrectionChange = onMajimeCorrectionChange,
         )
         StateFlagRow(
             stateFlags = entry.stateFlags,
@@ -806,32 +986,107 @@ private fun YokaiStatusEditorPanel(
 @Composable
 private fun StatusHeadRow(
     name: String,
+    yokaiId: Long,
+    yokaiOptions: List<YokaiOption>,
     classLabel: String,
     level: Int,
-    attitudes: List<YokaiAttitude>,
-    selectedAttitude: Int,
+    levelInputMax: Int,
+    onYokaiChange: (Long) -> Unit,
     onLevelChange: (Int) -> Unit,
-    onAttitudeChange: (Int) -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(name, modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+        YokaiDropdown(
+            yokaiOptions = yokaiOptions,
+            selectedId = yokaiId,
+            selectedName = name,
+            onSelected = onYokaiChange,
+            modifier = Modifier.weight(1f),
+        )
         Text(classLabel)
         CompactNumberField(
             value = level,
-            max = 99,
-            modifier = Modifier.width(64.dp),
+            max = levelInputMax,
+            modifier = Modifier.width(78.dp),
             onValueChange = onLevelChange,
         )
+    }
+}
+
+@Composable
+private fun AttitudeMajimeRow(
+    attitudes: List<YokaiAttitude>,
+    selectedAttitude: Int,
+    correction: Int,
+    onAttitudeChange: (Int) -> Unit,
+    onCorrectionChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("性格", modifier = Modifier.width(STATUS_LABEL_WIDTH), fontWeight = FontWeight.Medium)
         AttitudeDropdown(
             attitudes = attitudes,
             selectedId = selectedAttitude,
             onSelected = onAttitudeChange,
             modifier = Modifier.width(132.dp),
         )
+        Text("まじめ度")
+        CompactNumberField(
+            value = correction,
+            max = 255,
+            modifier = Modifier.width(84.dp),
+            onValueChange = onCorrectionChange,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YokaiDropdown(
+    yokaiOptions: List<YokaiOption>,
+    selectedId: Long,
+    selectedName: String,
+    onSelected: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = yokaiOptions.firstOrNull { it.id == selectedId }?.name ?: selectedName
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(type = ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
+                .fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            yokaiOptions.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.name) },
+                    onClick = {
+                        onSelected(option.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -907,20 +1162,33 @@ private fun StatusEditableRow(
     label: String,
     stat: Stat5,
     max: Int,
+    editableMask: List<Boolean>? = null,
     onValueChange: (Int, Int) -> Unit,
 ) {
     val values = stat.values()
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, modifier = Modifier.width(STATUS_LABEL_WIDTH), fontWeight = FontWeight.Medium)
         values.forEachIndexed { index, value ->
-            CompactNumberField(
-                value = value,
-                max = max,
-                modifier = Modifier
-                    .width(STATUS_CELL_WIDTH)
-                    .padding(horizontal = 1.dp),
-                onValueChange = { onValueChange(index, it) },
-            )
+            val enabled = editableMask?.getOrElse(index) { true } ?: true
+            if (enabled) {
+                CompactNumberField(
+                    value = value,
+                    max = max,
+                    modifier = Modifier
+                        .width(STATUS_CELL_WIDTH)
+                        .padding(horizontal = 1.dp),
+                    onValueChange = { onValueChange(index, it) },
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .width(STATUS_CELL_WIDTH)
+                        .padding(horizontal = 1.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(value.toString())
+                }
+            }
         }
     }
 }
@@ -944,21 +1212,21 @@ private fun TechniqueRow(
         CompactNumberField(
             value = attackLevel,
             max = 99,
-            modifier = Modifier.width(56.dp),
+            modifier = Modifier.width(72.dp),
             onValueChange = onAttackLevelChange,
         )
         Text("妖")
         CompactNumberField(
             value = techniqueLevel,
             max = 99,
-            modifier = Modifier.width(56.dp),
+            modifier = Modifier.width(72.dp),
             onValueChange = onTechniqueLevelChange,
         )
         Text("必")
         CompactNumberField(
             value = soultimateLevel,
             max = 99,
-            modifier = Modifier.width(56.dp),
+            modifier = Modifier.width(72.dp),
             onValueChange = onSoultimateLevelChange,
         )
     }
@@ -978,7 +1246,7 @@ private fun MajimeCorrectionRow(
         CompactNumberField(
             value = correction,
             max = 255,
-            modifier = Modifier.width(72.dp),
+            modifier = Modifier.width(84.dp),
             onValueChange = onCorrectionChange,
         )
         Text("補正値(0x76)")
@@ -1002,7 +1270,6 @@ private fun StateFlagRow(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text("状態フラグ 0x77 = 0x${(stateFlags and 0xFF).toString(16).uppercase().padStart(2, '0')}")
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1010,15 +1277,15 @@ private fun StateFlagRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = lockEnabled, onCheckedChange = { onFlagChange(lockMask, it) })
-                Text("おわかれ不可(0x03)")
+                Text("おわかれ不可")
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = bookEnabled, onCheckedChange = { onFlagChange(bookMask, it) })
-                Text("本使用済み(0x04)")
+                Text("本使用済み")
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = newEnabled, onCheckedChange = { onFlagChange(newMask, it) })
-                Text("NEW!(0x08)")
+                Text("NEW!")
             }
         }
     }
