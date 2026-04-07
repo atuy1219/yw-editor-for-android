@@ -163,7 +163,7 @@ class MainViewModel : ViewModel() {
                 val headSection = decoded.sections["head.yw"] ?: error("head.yw が見つかりません")
                 val entries = parser.parse(section.decryptedData)
                 val saveInfo = SaveInfoCodec.parse(section.decryptedData, headSection.decryptedData, sectionName)
-                val startupSlots = buildStartupSlots(decoded, path)
+                val startupSlots = buildStartupSlots(decoded)
                 val backupItems = gateway.listManagedBackups(path)
 
                 decodedMainBin = decoded
@@ -188,8 +188,7 @@ class MainViewModel : ViewModel() {
                         saveDay = saveInfo.saveDay,
                         saveHour = saveInfo.saveHour,
                         saveMinute = saveInfo.saveMinute,
-                        startupSlotsLoaded = true,
-                        message = "$sectionName を読み込みました",
+                        message = "",
                     )
                 }
             }.onFailure { e ->
@@ -228,7 +227,7 @@ class MainViewModel : ViewModel() {
             runCatching {
                 val raw = gateway.readBytes(path)
                 val decoded = codec.decode(raw)
-                val startupSlots = buildStartupSlots(decoded, path)
+                val startupSlots = buildStartupSlots(decoded)
                 val selectedSection = _uiState.value.selectedSection
                 val headData = decoded.sections["head.yw"]?.decryptedData
                 val selectedInfo = decoded.sections[selectedSection]?.let { section ->
@@ -311,7 +310,7 @@ class MainViewModel : ViewModel() {
                     refreshedHead.decryptedData,
                     sectionName,
                 )
-                val startupSlots = decodedMainBin?.let { buildStartupSlots(it, path) } ?: DEFAULT_STARTUP_SLOTS
+                val startupSlots = decodedMainBin?.let { buildStartupSlots(it) } ?: DEFAULT_STARTUP_SLOTS
                 val backupItems = gateway.listManagedBackups(path)
 
                 _uiState.update {
@@ -481,7 +480,7 @@ class MainViewModel : ViewModel() {
                 val headSection = decoded.sections["head.yw"] ?: error("head.yw が見つかりません")
                 val entries = parser.parse(section.decryptedData)
                 val saveInfo = SaveInfoCodec.parse(section.decryptedData, headSection.decryptedData, sectionName)
-                val startupSlots = buildStartupSlots(decoded, path)
+                val startupSlots = buildStartupSlots(decoded)
                 val backups = gateway.listManagedBackups(path)
                 decoded to Quadruple(entries, saveInfo, startupSlots, backups)
             }.onSuccess { (decoded, payload) ->
@@ -632,7 +631,7 @@ class MainViewModel : ViewModel() {
                         index = index,
                         requested = value,
                         cellMax = CHEAT_STAT_MAX,
-                        totalMax = if (isCheatMode) null else NORMAL_IVA_TOTAL_MAX,
+                        totalMax = NORMAL_IVA_TOTAL_MAX,
                     )
                     entry.copy(iva = applyIvaMask(updated, editableMask))
                 }
@@ -817,7 +816,7 @@ class MainViewModel : ViewModel() {
             .map { (id, name) -> YokaiOption(id = id, name = name) }
     }
 
-    private fun buildStartupSlots(decoded: MainBinDecoded, path: String): List<SaveSlotCard> {
+    private fun buildStartupSlots(decoded: MainBinDecoded): List<SaveSlotCard> {
         return DEFAULT_STARTUP_SLOTS.map { base ->
             val section = decoded.sections[base.sectionName]
             if (section == null) {

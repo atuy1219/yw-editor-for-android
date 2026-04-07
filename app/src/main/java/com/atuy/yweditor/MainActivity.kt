@@ -17,9 +17,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -41,7 +44,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -57,10 +59,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.atuy.yweditor.ui.theme.YwEditorTheme
 import com.atuy.yweditor.yokai.MainBinBackupInfo
@@ -77,6 +86,18 @@ import rikka.shizuku.Shizuku
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
+
+private val MAIN_BIN_PATH = listOf(
+    "",
+    "data",
+    "user",
+    "0",
+    "jp.co.level5.yws1",
+    "files",
+    "save",
+    "main.bin",
+).joinToString("/")
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -131,7 +152,6 @@ private fun AppScreen(
     shizukuGranted: Boolean,
 ) {
     val state by mainViewModel.uiState.collectAsState()
-    val mainBinPath = "/data/user/0/jp.co.level5.yws1/files/save/main.bin"
 
     BackHandler(enabled = state.currentScreen == AppScreen.Editor) {
         mainViewModel.backToStartup()
@@ -143,7 +163,7 @@ private fun AppScreen(
             shizukuGranted &&
             !state.startupSlotsLoaded
         ) {
-            mainViewModel.loadStartupSlots(mainBinPath)
+            mainViewModel.loadStartupSlots(MAIN_BIN_PATH)
         }
     }
 
@@ -155,7 +175,7 @@ private fun AppScreen(
             loading = state.loading,
             message = state.message,
             onSelectSlot = { sectionName ->
-                mainViewModel.openEditorForSection(mainBinPath, sectionName)
+                mainViewModel.openEditorForSection(MAIN_BIN_PATH, sectionName)
             },
             modifier = modifier,
         )
@@ -166,13 +186,13 @@ private fun AppScreen(
             isCheatMode = state.isCheatMode,
             onCheatModeChange = mainViewModel::setCheatMode,
             onBack = mainViewModel::backToStartup,
-            onSave = { mainViewModel.save(mainBinPath) },
+            onSave = { mainViewModel.save(MAIN_BIN_PATH) },
             onCreateBackup = { name, epochMillis ->
-                mainViewModel.createBackup(mainBinPath, name, epochMillis)
+                mainViewModel.createBackup(MAIN_BIN_PATH, name, epochMillis)
             },
-            onRefreshBackups = { mainViewModel.refreshBackups(mainBinPath) },
+            onRefreshBackups = { mainViewModel.refreshBackups(MAIN_BIN_PATH) },
             onRestoreBackup = { backupFileName ->
-                mainViewModel.restoreBackup(mainBinPath, backupFileName)
+                mainViewModel.restoreBackup(MAIN_BIN_PATH, backupFileName)
             },
             onTabSelect = mainViewModel::selectTopTab,
             onYokaiCardClick = { slot ->
@@ -308,60 +328,47 @@ private fun EditorScreen(
     onSaveMinuteChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var showCreateBackupDialog by remember { mutableStateOf(false) }
-    var showBackupListDialog by remember { mutableStateOf(false) }
-    var restoreTarget by remember { mutableStateOf<MainBinBackupInfo?>(null) }
+    val showCreateBackupDialog = remember { mutableStateOf(false) }
+    val showBackupListDialog = remember { mutableStateOf(false) }
+    val restoreTarget = remember { mutableStateOf<MainBinBackupInfo?>(null) }
+    var topChromeOffsetPx by remember { mutableStateOf(0f) }
+    var topChromeHeightPx by remember { mutableStateOf(0f) }
+    val density = LocalDensity.current
 
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text("編集: ${state.selectedSection.removeSuffix(".yw")}") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
-                    }
-                },
-                actions = {
-                    TextButton(
-                        onClick = { showCreateBackupDialog = true },
-                        enabled = shizukuGranted && state.loaded && !state.backupsCreating && !state.saving,
-                    ) {
-                        Text("バックアップ")
-                    }
-                    TextButton(
-                        onClick = {
-                            onRefreshBackups()
-                            showBackupListDialog = true
-                        },
-                        enabled = shizukuGranted && state.loaded && !state.backupsLoading && !state.backupsRestoring,
-                    ) {
-                        Text("リストア")
-                    }
-                    IconButton(
-                        onClick = onSave,
-                        enabled = shizukuGranted && state.loaded && !state.saving,
-                    ) {
-                        Icon(imageVector = Icons.Filled.Save, contentDescription = "保存")
-                    }
-                },
-            )
-        },
-    ) { innerPadding ->
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (topChromeHeightPx <= 0f) return Offset.Zero
+
+                val previousOffset = topChromeOffsetPx
+                val nextOffset = (previousOffset + available.y).coerceIn(-topChromeHeightPx, 0f)
+                topChromeOffsetPx = nextOffset
+
+                // Consume only the distance used by header motion so content doesn't scroll in parallel.
+                val consumedY = nextOffset - previousOffset
+                return Offset(x = 0f, y = consumedY)
+            }
+        }
+    }
+
+    LaunchedEffect(state.selectedTopTab) {
+        topChromeOffsetPx = 0f
+    }
+
+    val topChromeVisibleHeightDp = with(density) {
+        (topChromeHeightPx + topChromeOffsetPx).coerceAtLeast(0f).toDp()
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .nestedScroll(nestedScrollConnection),
+    ) {
         Column(
             modifier = Modifier
-                .padding(innerPadding)
                 .fillMaxSize(),
         ) {
-            PrimaryTabRow(selectedTabIndex = state.selectedTopTab.ordinal) {
-                EditorTopTab.entries.forEach { tab ->
-                    Tab(
-                        selected = state.selectedTopTab == tab,
-                        onClick = { onTabSelect(tab) },
-                        text = { Text(tab.label) },
-                    )
-                }
-            }
+            Spacer(modifier = Modifier.height(topChromeVisibleHeightDp))
 
             if (state.message.isNotBlank()) {
                 Text(
@@ -380,8 +387,6 @@ private fun EditorScreen(
                     onCheatModeChange = onCheatModeChange,
                     levelInputMax = if (isCheatMode) 255 else 99,
                     ivaInputMax = if (isCheatMode) 255 else 8,
-                    ivb1InputMax = 15,
-                    ivb2InputMax = 15,
                     cbInputMax = if (isCheatMode) 255 else 20,
                     onCardClick = onYokaiCardClick,
                     onYokaiChange = onYokaiChange,
@@ -397,7 +402,6 @@ private fun EditorScreen(
                 )
 
                 EditorTopTab.Info -> SaveInfoEditorSection(
-                    title = "セーブ情報",
                     playHours = state.playHours,
                     playMinutes = state.playMinutes,
                     money = state.money,
@@ -428,42 +432,95 @@ private fun EditorScreen(
                 )
             }
         }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .zIndex(1f)
+                .onSizeChanged { size ->
+                    topChromeHeightPx = size.height.toFloat()
+                    topChromeOffsetPx = topChromeOffsetPx.coerceIn(-topChromeHeightPx, 0f)
+                }
+                .offset { androidx.compose.ui.unit.IntOffset(0, topChromeOffsetPx.roundToInt()) },
+        ) {
+            TopAppBar(
+                title = { Text("編集: ${state.selectedSection.removeSuffix(".yw")}") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                    }
+                },
+                actions = {
+                    TextButton(
+                        onClick = { showCreateBackupDialog.value = true },
+                        enabled = shizukuGranted && state.loaded && !state.backupsCreating && !state.saving,
+                    ) {
+                        Text("バックアップ")
+                    }
+                    TextButton(
+                        onClick = {
+                            onRefreshBackups()
+                            showBackupListDialog.value = true
+                        },
+                        enabled = shizukuGranted && state.loaded && !state.backupsLoading && !state.backupsRestoring,
+                    ) {
+                        Text("リストア")
+                    }
+                    IconButton(
+                        onClick = onSave,
+                        enabled = shizukuGranted && state.loaded && !state.saving,
+                    ) {
+                        Icon(imageVector = Icons.Filled.Save, contentDescription = "保存")
+                    }
+                },
+            )
+
+            PrimaryTabRow(selectedTabIndex = state.selectedTopTab.ordinal) {
+                EditorTopTab.entries.forEach { tab ->
+                    Tab(
+                        selected = state.selectedTopTab == tab,
+                        onClick = { onTabSelect(tab) },
+                        text = { Text(tab.label) },
+                    )
+                }
+            }
+        }
     }
 
-    if (showCreateBackupDialog) {
+    if (showCreateBackupDialog.value) {
         CreateBackupDialog(
             creating = state.backupsCreating,
-            onDismiss = { showCreateBackupDialog = false },
+            onDismiss = { showCreateBackupDialog.value = false },
             onConfirm = { name, epochMillis ->
                 onCreateBackup(name, epochMillis)
-                showCreateBackupDialog = false
+                showCreateBackupDialog.value = false
             },
         )
     }
 
-    if (showBackupListDialog) {
+    if (showBackupListDialog.value) {
         BackupListDialog(
             backupItems = state.backupItems,
             loading = state.backupsLoading,
             restoring = state.backupsRestoring,
-            onDismiss = { showBackupListDialog = false },
+            onDismiss = { showBackupListDialog.value = false },
             onRefresh = onRefreshBackups,
-            onRequestRestore = { restoreTarget = it },
+            onRequestRestore = { restoreTarget.value = it },
         )
     }
 
-    val target = restoreTarget
+    val target = restoreTarget.value
     if (target != null) {
         AlertDialog(
-            onDismissRequest = { restoreTarget = null },
+            onDismissRequest = { restoreTarget.value = null },
             title = { Text("バックアップを復元") },
             text = { Text("${target.displayName} (${formatDateTime(target.backupEpochMillis)}) を復元します。現在の main.bin は上書きされます。") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         onRestoreBackup(target.fileName)
-                        restoreTarget = null
-                        showBackupListDialog = false
+                        restoreTarget.value = null
+                        showBackupListDialog.value = false
                     },
                     enabled = !state.backupsRestoring,
                 ) {
@@ -471,7 +528,7 @@ private fun EditorScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { restoreTarget = null }) {
+                TextButton(onClick = { restoreTarget.value = null }) {
                     Text("キャンセル")
                 }
             },
@@ -481,7 +538,6 @@ private fun EditorScreen(
 
 @Composable
 private fun SaveInfoEditorSection(
-    title: String,
     playHours: Int,
     playMinutes: Int,
     money: Int,
@@ -503,111 +559,115 @@ private fun SaveInfoEditorSection(
     onSaveMinuteChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Card(modifier = modifier) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+    ) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("プレイ時間")
-                CompactNumberField(
-                    value = playHours,
-                    max = 999_999,
-                    modifier = Modifier.width(100.dp),
-                    onValueChange = onPlayHoursChange,
-                )
-                Text("時間")
-                CompactNumberField(
-                    value = playMinutes,
-                    max = 59,
-                    modifier = Modifier.width(84.dp),
-                    onValueChange = onPlayMinutesChange,
-                )
-                Text("分")
-            }
+                Text("セーブ情報", fontWeight = FontWeight.Bold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("プレイ時間")
+                    CompactNumberField(
+                        value = playHours,
+                        max = 999_999,
+                        modifier = Modifier.width(100.dp),
+                        onValueChange = onPlayHoursChange,
+                    )
+                    Text("時間")
+                    CompactNumberField(
+                        value = playMinutes,
+                        max = 59,
+                        modifier = Modifier.width(84.dp),
+                        onValueChange = onPlayMinutesChange,
+                    )
+                    Text("分")
+                }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("所持金")
-                CompactNumberField(
-                    value = money,
-                    max = SaveInfoCodec.MONEY_MAX,
-                    modifier = Modifier.width(140.dp),
-                    onValueChange = onMoneyChange,
-                )
-                Text("円")
-            }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("所持金")
+                    CompactNumberField(
+                        value = money,
+                        max = SaveInfoCodec.MONEY_MAX,
+                        modifier = Modifier.width(140.dp),
+                        onValueChange = onMoneyChange,
+                    )
+                    Text("円")
+                }
 
-            val nameBytes = playerName.toByteArray(Charsets.UTF_8).size
-            OutlinedTextField(
-                value = playerName,
-                onValueChange = onPlayerNameChange,
-                singleLine = true,
-                label = { Text("プレイヤー名") },
-                isError = playerNameError != null,
-                supportingText = {
-                    Text(playerNameError ?: "UTF-8 ${nameBytes}/23 バイト")
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+                val nameBytes = playerName.toByteArray(Charsets.UTF_8).size
+                OutlinedTextField(
+                    value = playerName,
+                    onValueChange = onPlayerNameChange,
+                    singleLine = true,
+                    label = { Text("プレイヤー名") },
+                    isError = playerNameError != null,
+                    supportingText = {
+                        Text(playerNameError ?: "UTF-8 ${nameBytes}/23 バイト")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
-            Text("セーブ日時")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CompactNumberField(
-                    value = saveYear,
-                    max = 9999,
-                    modifier = Modifier.width(100.dp),
-                    onValueChange = onSaveYearChange,
-                )
-                Text("年")
-                CompactNumberField(
-                    value = saveMonth,
-                    max = 12,
-                    modifier = Modifier.width(72.dp),
-                    onValueChange = onSaveMonthChange,
-                )
-                Text("月")
-                CompactNumberField(
-                    value = saveDay,
-                    max = 31,
-                    modifier = Modifier.width(72.dp),
-                    onValueChange = onSaveDayChange,
-                )
-                Text("日")
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CompactNumberField(
-                    value = saveHour,
-                    max = 23,
-                    modifier = Modifier.width(84.dp),
-                    onValueChange = onSaveHourChange,
-                )
-                Text("時")
-                CompactNumberField(
-                    value = saveMinute,
-                    max = 59,
-                    modifier = Modifier.width(84.dp),
-                    onValueChange = onSaveMinuteChange,
-                )
-                Text("分")
+                Text("セーブ日時")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CompactNumberField(
+                        value = saveYear,
+                        max = 9999,
+                        modifier = Modifier.width(100.dp),
+                        onValueChange = onSaveYearChange,
+                    )
+                    Text("年")
+                    CompactNumberField(
+                        value = saveMonth,
+                        max = 12,
+                        modifier = Modifier.width(72.dp),
+                        onValueChange = onSaveMonthChange,
+                    )
+                    Text("月")
+                    CompactNumberField(
+                        value = saveDay,
+                        max = 31,
+                        modifier = Modifier.width(72.dp),
+                        onValueChange = onSaveDayChange,
+                    )
+                    Text("日")
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CompactNumberField(
+                        value = saveHour,
+                        max = 23,
+                        modifier = Modifier.width(84.dp),
+                        onValueChange = onSaveHourChange,
+                    )
+                    Text("時")
+                    CompactNumberField(
+                        value = saveMinute,
+                        max = 59,
+                        modifier = Modifier.width(84.dp),
+                        onValueChange = onSaveMinuteChange,
+                    )
+                    Text("分")
+                }
             }
         }
     }
@@ -621,7 +681,7 @@ private fun CreateBackupDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var dateText by remember { mutableStateOf(formatDateForInput(System.currentTimeMillis())) }
-    var dateError by remember { mutableStateOf(false) }
+    val dateError = remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = {
@@ -641,15 +701,15 @@ private fun CreateBackupDialog(
                     value = dateText,
                     onValueChange = {
                         dateText = it
-                        dateError = false
+                        dateError.value = false
                     },
                     singleLine = true,
                     label = { Text("日時(yyyyMMddHHmm)") },
-                    isError = dateError,
+                    isError = dateError.value,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (dateError) {
+                if (dateError.value) {
                     Text("日時は yyyyMMddHHmm 形式で入力してください")
                 }
             }
@@ -659,7 +719,7 @@ private fun CreateBackupDialog(
                 onClick = {
                     val parsed = parseDateFromInput(dateText)
                     if (parsed == null) {
-                        dateError = true
+                        dateError.value = true
                         return@TextButton
                     }
                     onConfirm(name, parsed)
@@ -774,8 +834,6 @@ private fun YokaiTabContent(
     onCheatModeChange: (Boolean) -> Unit,
     levelInputMax: Int,
     ivaInputMax: Int,
-    ivb1InputMax: Int,
-    ivb2InputMax: Int,
     cbInputMax: Int,
     onCardClick: (Int) -> Unit,
     onYokaiChange: (Int, Long) -> Unit,
@@ -865,8 +923,6 @@ private fun YokaiTabContent(
                                 isCheatMode = isCheatMode,
                                 levelInputMax = levelInputMax,
                                 ivaInputMax = ivaInputMax,
-                                ivb1InputMax = ivb1InputMax,
-                                ivb2InputMax = ivb2InputMax,
                                 cbInputMax = cbInputMax,
                                 onYokaiChange = { onYokaiChange(entry.slot, it) },
                                 onLevelChange = { onLevelChange(entry.slot, it) },
@@ -911,8 +967,6 @@ private fun YokaiStatusEditorPanel(
     isCheatMode: Boolean,
     levelInputMax: Int,
     ivaInputMax: Int,
-    ivb1InputMax: Int,
-    ivb2InputMax: Int,
     cbInputMax: Int,
     onYokaiChange: (Long) -> Unit,
     onLevelChange: (Int) -> Unit,
@@ -964,8 +1018,8 @@ private fun YokaiStatusEditorPanel(
             editableMask = ivaEditableMask,
             onValueChange = { i, v -> onStatChange(StatGroup.IVA, i, v) },
         )
-        StatusEditableRow(label = "IVB1", stat = entry.ivb1, max = ivb1InputMax, onValueChange = { i, v -> onStatChange(StatGroup.IVB1, i, v) })
-        StatusEditableRow(label = "IVB2", stat = entry.ivb2, max = ivb2InputMax, onValueChange = { i, v -> onStatChange(StatGroup.IVB2, i, v) })
+        StatusEditableRow(label = "IVB1", stat = entry.ivb1, max = 15, onValueChange = { i, v -> onStatChange(StatGroup.IVB1, i, v) })
+        StatusEditableRow(label = "IVB2", stat = entry.ivb2, max = 15, onValueChange = { i, v -> onStatChange(StatGroup.IVB2, i, v) })
         StatusEditableRow(label = "CB", stat = entry.cb, max = cbInputMax, onValueChange = { i, v -> onStatChange(StatGroup.CB, i, v) })
         StatusReadOnlyRow(label = "最終", values = finalStatus?.values() ?: ZERO_STAT)
         TechniqueRow(
@@ -1232,26 +1286,6 @@ private fun TechniqueRow(
     }
 }
 
-@Composable
-private fun MajimeCorrectionRow(
-    correction: Int,
-    onCorrectionChange: (Int) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("まじめ度", modifier = Modifier.width(STATUS_LABEL_WIDTH), fontWeight = FontWeight.Medium)
-        CompactNumberField(
-            value = correction,
-            max = 255,
-            modifier = Modifier.width(84.dp),
-            onValueChange = onCorrectionChange,
-        )
-        Text("補正値(0x76)")
-    }
-}
 
 @Composable
 private fun StateFlagRow(
